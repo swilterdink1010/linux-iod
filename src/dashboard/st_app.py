@@ -111,22 +111,33 @@ def check_thresholds(server, stats):
 		else:
 			st.session_state["active_alerts"].discard(key)
 
-# fetch data using connect_to() every 5 seconds
-@st.fragment(run_every="5s")
+# fetch data using connect_to() every 5 seconds.
+# FIX v2 for duplicate graphs: the st.empty() placeholder is created
+# INSIDE the fragment. A fragment rerun replaces everything the
+# fragment produced last time, so the placeholder + chart get swapped
+# out as one block. (v1 created the placeholder outside the fragment;
+# the fragment's writes then appended instead of replacing, and a
+# stale chart survived every refresh.)
 def update_data(server):
-	try:
-		stats = connect_to(server.addr, server.port)
-		st.session_state["data"][server.addr] = pd.concat([st.session_state["data"][server.addr], pd.DataFrame([stats])])
-		check_thresholds(server, stats)
-	except RuntimeError as e: st.error(e)
-	# persistent red banner in this server's tab while any metric is over
-	for (name, metric) in sorted(st.session_state["active_alerts"]):
-		if name == server.name:
-			st.error(f"⚠️ {metric} is over its alert threshold")
-	df = st.session_state["data"][server.addr]
-	df = df[df["time"] > time.time() - history_len]
-	df = df.assign(time=pd.to_datetime(df["time"], unit="s"))
-	st.area_chart(df, x="time", y=current_metrics)
+	@st.fragment(run_every="5s")
+	def render():
+		slot = st.empty()
+		with slot.container():
+			try:
+				stats = connect_to(server.addr, server.port)
+				st.session_state["data"][server.addr] = pd.concat([st.session_state["data"][server.addr], pd.DataFrame([stats])])
+				check_thresholds(server, stats)
+			except RuntimeError as e: st.error(e)
+			# persistent red banner in this server's tab while any metric is over
+			for (name, metric) in sorted(st.session_state["active_alerts"]):
+				if name == server.name:
+					st.error(f"⚠️ {metric} is over its alert threshold")
+			df = st.session_state["data"][server.addr]
+			df = df[df["time"] > time.time() - history_len]
+			df = df.assign(time=pd.to_datetime(df["time"], unit="s"))
+			st.area_chart(df, x="time", y=current_metrics)
+
+	render()
 
 for server in SERVERS.values():
 	with server.tab:
